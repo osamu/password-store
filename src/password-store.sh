@@ -227,6 +227,9 @@ cmd_usage() {
 	    $PROGRAM [show] [--clip[=line-number],-c[line-number]] pass-name
 	        Show existing password and optionally put it on the clipboard.
 	        If put on the clipboard, it will be cleared in $CLIP_TIME seconds.
+	    $PROGRAM onetime pass-name
+	        Show one-time password based on pass-name as KEY
+	        You must save base32 encoding key as password
 	    $PROGRAM grep search-string
 	        Search for password files containing search-string when decrypted.
 	    $PROGRAM insert [--echo,-e | --multiline,-m] [--force,-f] pass-name
@@ -571,6 +574,46 @@ cmd_git() {
 	fi
 }
 
+cmd_onetime() {
+	local opts clip=0
+	opts="$($GETOPT -o c -l clip -n "$PROGRAM" -- "$@")"
+	local err=$?
+	eval set -- "$opts"
+	while true; do case $1 in
+		-c|--clip) clip=1; shift ;;
+		--) shift; break ;;
+	esac done
+
+	[[ $err -ne 0 ]] && die "Usage: $PROGRAM $COMMAND [--clip,-c] [onetime key pass-name]"
+
+	if ! which oathtool &>/dev/null; then
+	    die "Error: You need oathtool"
+	fi
+
+	local path="$1"
+	local passfile="$PREFIX/$path.gpg"
+	check_sneaky_paths "$path"
+	if [[ -f $passfile ]]; then
+	    local pass="$($GPG -d "${GPG_OPTS[@]}" "$passfile" | head -n 1)"
+	    if [[ $clip -eq 0 ]]; then
+		oathtool -b --totp $pass
+	    else
+		local code="$(oathtool -b --totp $pass)"
+		clip "$code" "$path"
+	    fi
+	elif [[ -d $PREFIX/$path ]]; then
+		if [[ -z $path ]]; then
+			echo "Password Store"
+		else
+			echo "${path%\/}"
+		fi
+		tree -C -l --noreport "$PREFIX/$path" | tail -n +2 | sed -E 's/\.gpg(\x1B\[[0-9]+m)?( ->|$)/\1\2/g' # remove .gpg at end of line, but keep colors
+	elif [[ -z $path ]]; then
+		die "Error: password store is empty. Try \"pass init\"."
+	else
+		die "Error: $path is not in the password store."
+	fi
+}
 #
 # END subcommand functions
 #
@@ -592,6 +635,7 @@ case "$1" in
 	rename|mv) shift;		cmd_copy_move "move" "$@" ;;
 	copy|cp) shift;			cmd_copy_move "copy" "$@" ;;
 	git) shift;			cmd_git "$@" ;;
+	onetime) shift;                 cmd_onetime "$@" ;;
 	*) COMMAND="show";		cmd_show "$@" ;;
 esac
 exit 0
